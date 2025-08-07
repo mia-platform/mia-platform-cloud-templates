@@ -1,0 +1,124 @@
+# This pipeline provisions infrastructure and deploys versioned packages from an Azure Artifacts feed.
+
+trigger: none
+
+variables:
+  azureSubscription: '{{AZURE_SUBSCRIPTION}}'
+  subscriptionId: '{{AZURE_SUBSCRIPTION_ID}}'
+  resourceGroupName: '{{AZURE_RESOURCE_GROUP_NAME}}'
+  location: '{{AZURE_LOCATION}}'
+  templateDirectory: 'environments/DEV' # Directory to search for YAML templates
+  # The Azure DevOps project and feed where the packages are stored.
+  feedName: '{{AZURE_PACKAGE_FEED_NAME}}'
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+stages:
+- stage: Infrastructure
+  displayName: 'Provision Infrastructure'
+  jobs:
+  # Job 1: Find all .yaml files and their base names
+  - job: FindTemplates
+    displayName: 'Find ARM Templates'
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - powershell: |
+        # Search for all YAML files in the directory specified by the variable
+        $files = Get-ChildItem -Path "$(templateDirectory)" -Filter "*.yaml" -Recurse
+        $matrix = @{}
+        # Get the repository's base path to create relative paths for the template location
+        $basePath = "$(System.DefaultWorkingDirectory)/"
+        Write-Host "Searching for templates in: $($basePath)$(templateDirectory)"
+
+        foreach ($file in $files) {
+            # Use a relative path for the template location, e.g., environments/DEV/hello-world.yaml
+            $relativePath = $file.FullName.Replace($basePath, "")
+            # Get the base name of the file (e.g., "hello-world" from "hello-world.yaml")
+            # This name must match the package name in the Azure Artifacts feed.
+            $fileName = $file.BaseName
+            # Create a unique and safe key for the matrix from the file path
+            $key = $relativePath.Replace('/', '_').Replace('\', '_').Replace('.', '_')
+            
+            # Add both the template path and the file's base name (as the package name) to the matrix
+            $matrix.Add($key, @{ "armTemplateLocation" = $relativePath; "fileName" = $fileName })
+        }
+
+        # If no templates are found, create an empty JSON object to prevent pipeline errors
+        if ($matrix.Count -eq 0) {
+            Write-Host "No YAML templates found in $(templateDirectory)."
+            $json = "{}"
+        } else {
+            # Convert the PowerShell object to a JSON string for the matrix strategy
+            $json = $matrix | ConvertTo-Json -Compress
+        }
+        
+        Write-Host "Generated Matrix: $json"
+        # Set the JSON string as an output variable named 'matrix' for the next job
+        Write-Host "##vso[task.setvariable variable=matrix;isOutput=true]$json"
+      name: SetMatrix
+      displayName: 'Find YAML files and set matrix variable'
+
+  # Job 2: Deploy each template found by the previous job
+  - job: Provision
+    displayName: 'Run ARM Templates'
+    dependsOn: FindTemplates
+    condition: and(succeeded(), ne(dependencies.FindTemplates.outputs['SetMatrix.matrix'], '{}'))
+    strategy:
+      matrix: $[ dependencies.FindTemplates.outputs['SetMatrix.matrix'] ]
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      # Dynamically create the appName based on the fileName from the matrix
+      currentAppName: '$(fileName)-node-app'
+    steps:
+    - task: AzureResourceManagerTemplateDeployment@3
+      displayName: 'Deploying $(armTemplateLocation)'
+      inputs:
+        deploymentScope: 'Resource Group'
+        azureResourceManagerConnection: $(azureSubscription)
+        subscriptionId: $(subscriptionId)
+        action: 'Create Or Update Resource Group'
+        resourceGroupName: $(resourceGroupName)
+        location: $(location)
+        templateLocation: 'Linked artifact'
+        csmFile: $(armTemplateLocation)
+        overrideParameters: '-appName $(currentAppName)'
+        deploymentMode: 'Incremental'
+
+- stage: Deploy
+  displayName: 'Download Package and Deploy Apps'
+  dependsOn: Infrastructure
+  condition: succeeded()
+  jobs:
+  - job: DeployApp
+    displayName: 'Deploy App'
+    strategy:
+      matrix: $[ stageDependencies.Infrastructure.FindTemplates.outputs['SetMatrix.matrix'] ]
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      # Dynamically create the appName based on the fileName from the matrix
+      currentAppName: '$(fileName)-node-app'
+    steps:
+    # This task downloads the specific package from the shared Azure Artifacts feed.
+    - task: UniversalPackages@0
+      displayName: 'Download $(fileName) package'
+      inputs:
+        command: 'download'
+        downloadDirectory: '$(Pipeline.Workspace)/package'
+        feedsToUse: 'internal'
+        vstsFeed: '$(feedName)'
+        vstsFeedPackage: '$(fileName)'
+        vstsPackageVersion: '*'
+
+    - task: AzureWebApp@1
+      inputs:
+        azureSubscription: $(azureSubscription)
+        appType: 'webAppLinux'
+        appName: $(currentAppName)
+        # The path to the downloaded .zip file from the Universal Package.
+        package: '$(Pipeline.Workspace)/package/$(fileName).zip'
+        deploymentMethod: 'zipDeploy'
+      displayName: 'Deploy to Azure App Service'
