@@ -1,0 +1,33 @@
+trigger: "none"
+
+jobs:
+  - deployment: deploy_job
+    environment: $(ENVIRONMENT_TO_DEPLOY)
+    pool:
+      vmImage: 'ubuntu-latest'
+    variables:
+      - group: $(VARIABLES_GROUP_NAME)
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - checkout: self
+            - bash: |
+                apk add --no-cache wget bash
+                echo "Download mipy"
+                wget https://github.com/mia-platform/mipy/releases/download/v0.3.5/mipy-linux-amd64 -O mipy
+                chmod +x mipy
+                mv mipy /usr/local/bin/mipy
+                mipy version
+                echo "mipy successfully installed."
+              displayName: "mipy install"
+            - bash: |
+                echo "mipy set config"
+                mipy config set mipy.json
+                echo "mipy get config"
+                mipy config get
+              displayName: "mipy set config"
+            - bash: |
+                echo "mipy launch"
+                mipy launch -e $(ENVIRONMENT_TO_DEPLOY) -f -u $(DEVOPS_TRIGGER_USER) -p $(DEVOPS_TRIGGER_PRIVATE_ACCESS_TOKEN)
+              displayName: "mipy run"
