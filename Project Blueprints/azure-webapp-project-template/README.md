@@ -1,6 +1,10 @@
 # 🚧 Azure WebApp Project Template DRAFT
 ⚠️ **This project blueprint is a DRAFT and simplified example only!** ⚠️
 
+💡 This project blueprint can be used to demonstrate how to manage an Azure WebApp seamlessly within the Console. This is the overall architecture of the solution.
+
+![Azure-WebApp](images/Azure-WebApp.drawio.png)
+
  - The provided pipeline contains hardcoded `templateDirectory` assuming only `DEV` environment exists.
  - The provided pipeline has been tested only on a **specific use case** and has hardcoded references and names (e.g. `currentAppName`).
  - This project requires a [Custom Orchestrator Generator](#custom-orchestrator-generator) to properly work.

@@ -1,5 +1,10 @@
 # 🚧 Terraform Manager Project Template DRAFT
 ⚠️ **This project blueprint is a DRAFT and simplified example only!** ⚠️
+
+💡 This project blueprint can be used to demonstrate how to manage a multi-module Terraform project seamlessly within the Console. This is the overall architecture of the solution.
+
+![Terraform-Multi-Module](images/Terraform-Multi-Module.drawio.png)
+
  - The provided pipeline has been tested only on a **specific use case** and may have hardcoded references and names.
 
  📚 **Use this as a learning reference, not for production deployments**
