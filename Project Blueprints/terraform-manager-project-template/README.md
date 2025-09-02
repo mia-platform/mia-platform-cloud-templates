@@ -152,7 +152,7 @@ Asset descriptor for Software Marketplace item related to Azure Storage. The `te
 }
 ```
 
-[Here](../attachments/terraform-project-storage/), a sample Terraform repository for Azure VM.
+[Here](../attachments/terraform-project-storage/), a sample Terraform repository for Azure Storage.
 
 ### Azure VM
 Asset descriptor for Software Marketplace item related to Azure VM. The `terraformProjectId` parameter must reference an existing Terraform project on Azure DevOps: that will be the repository where the Terraform scripts to be executed are committed. That pipeline will be executed with the generated Terraform variables.
