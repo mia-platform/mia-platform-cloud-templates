@@ -1,0 +1,254 @@
+trigger: none
+pool:
+  vmImage: ubuntu-latest
+
+parameters:
+  - name: DEBUG_MODE
+    displayName: "Enable debug mode"
+    type: boolean
+    default: False
+  - name: TERRAFORM_AUTO_APPROVE
+    displayName: "Terraform action - Automatic approval"
+    type: boolean
+    default: False
+  - name: TERRAFORM_ACTION
+    displayName: "Terraform action to be performed"
+    type: string
+    default: 'apply'
+    values:
+      - 'apply'
+      - 'destroy'
+  - name: CUSTOM_RESOURCE_NAME
+    displayName: "The name of the Infrastructure Resource coming from the Console"
+    type: string
+    default: 'not-specified'
+  - name: PERSIST_CONSOLE_VARIABLES
+    displayName: "Commit the variables received from the Console"
+    type: boolean
+    default: True
+
+variables:
+  - group: mycompany-poc
+  - ${{ if eq(parameters.DEBUG_MODE, True) }}:
+    - name: TF_LOG
+      value: 'DEBUG'
+  - name: PREPARATION_WORKSPACE_DIRECTORY
+    value: $(Build.ArtifactStagingDirectory)/workspace/terraformPrepare
+    readonly: True
+  - name: PLAN_WORKSPACE_DIRECTORY
+    value: $(Build.ArtifactStagingDirectory)/workspace/terraformPlan
+    readonly: True
+  - name: APPLY_WORKSPACE_DIRECTORY
+    value: $(Build.ArtifactStagingDirectory)/workspace/terraformApply
+    readonly: True
+
+stages:
+  - stage: Preparation
+    displayName: "Artifacts preparation"
+    jobs:
+      - job: Setup
+        steps:
+          - bash: |
+              echo $(TERRAFORM_VARIABLES) | base64 --decode | tr '\r' '\n' > console.variables.tf
+              if [ ${{ parameters.DEBUG_MODE }} == True ]; then
+                echo "Terraform action to be performed: ${{ parameters.TERRAFORM_ACTION }}"
+                echo "Automatic approoval: ${{ parameters.TERRAFORM_AUTO_APPROVE }}"
+                echo "Variables that will be used:"
+                cat console.variables.tf
+                echo "Folder view:"
+                ls -al
+              fi
+            displayName: "Prepare Terraform artifacts"
+          - bash: |
+              mkdir -p $(PREPARATION_WORKSPACE_DIRECTORY)
+              cp console.variables.tf $(PREPARATION_WORKSPACE_DIRECTORY)
+              if [ ${{ parameters.DEBUG_MODE }} == True ]; then
+                echo "Creating workspace directory to upload pipeline resources:"
+                ls -al $(PREPARATION_WORKSPACE_DIRECTORY)
+              fi
+            displayName: "Creating preparation workspace folder"
+          - task: PublishPipelineArtifact@1
+            displayName: "Publishing preparation workspace directory"
+            inputs:
+              targetPath: '$(PREPARATION_WORKSPACE_DIRECTORY)'
+              artifact: 'terraformPrepare'
+              publishLocation: 'pipeline'
+
+  - stage: Plan
+    displayName: "Terraform Plan"
+    jobs:
+      - job: Plan
+        displayName: "Plan and artifact caching"
+        steps:
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'terraformPrepare'
+              targetPath: './'
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: '1.9.0'
+            displayName: "Install Terraform"
+          - bash: |
+              echo $ARM_CLIENT_ID
+              terraform init -upgrade
+              terraform fmt
+              terraform validate
+            displayName: "Terraform Init, Format and Validate"
+            env:
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+          - bash: |
+                if [ ${{ parameters.DEBUG_MODE }} == True ]; then
+                  echo "Variables that will be used:"
+                  cat console.variables.tf
+                  echo "Folder view:"
+                  ls -al
+                fi
+                if [ '${{ parameters.TERRAFORM_ACTION }}' == 'destroy' ]; then
+                  echo "Generating plan for Destroy"
+                  terraform plan -destroy -out=tfplan
+                else
+                  echo "generating plan for Apply"
+                  terraform plan -out=tfplan
+                fi
+            displayName: "Terraform Plan - ${{ parameters.TERRAFORM_ACTION }}"
+            env:
+              ARM_SKIP_PROVIDER_REGISTRATION: true
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+          
+          - bash: |
+              mkdir -p $(PLAN_WORKSPACE_DIRECTORY)
+              cp tfplan $(PLAN_WORKSPACE_DIRECTORY)
+              cp .terraform.lock.hcl $(PLAN_WORKSPACE_DIRECTORY)
+              
+              if [ ${{ parameters.DEBUG_MODE }} == True ]; then
+                echo "Creating workspace directory to upload pipeline resources:"
+                ls -al $(PLAN_WORKSPACE_DIRECTORY)
+              fi
+            displayName: "Creating workspace plan folder"
+          - task: PublishPipelineArtifact@1
+            displayName: "Publishing plan workspace directory"
+            inputs:
+              targetPath: '$(PLAN_WORKSPACE_DIRECTORY)'
+              artifact: 'terraformPlan'
+              publishLocation: 'pipeline'
+
+  - stage: ManualApproval
+    displayName: "Manual approval verification"
+    dependsOn: Plan
+    condition: and(eq(${{ parameters.TERRAFORM_AUTO_APPROVE }}, False), eq(dependencies.Plan.result, 'Succeeded'))
+    jobs:
+      - deployment: WaitForApproval
+        displayName: "Manual Approval Step"
+        environment: "TERRAFORM"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: echo "Manual approval step"
+                  displayName: "Manual Approval Step"
+
+  - stage: Apply
+    displayName: "Terraform Apply - ${{ parameters.TERRAFORM_ACTION }}"
+    dependsOn: ManualApproval
+    condition: or(and(eq(${{ parameters.TERRAFORM_AUTO_APPROVE }}, False), eq(dependencies.ManualApproval.result, 'Succeeded')),and(eq(${{ parameters.TERRAFORM_AUTO_APPROVE }}, True),eq(dependencies.ManualApproval.result, 'Skipped')))
+    jobs:
+      - job: Apply
+        displayName: "Terraform apply with previous stages artifacts"
+        steps:
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'terraformPrepare'
+              targetPath: './'
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'terraformPlan'
+              targetPath: './'
+          - task: TerraformInstaller@1
+            inputs:
+              terraformVersion: '1.9.0'
+            displayName: "Install Terraform"
+          - bash: |
+              if [ ${{ parameters.DEBUG_MODE }} == True ]; then
+                echo "Folder view:"
+                ls -la
+              fi
+              terraform init
+              terraform apply tfplan
+            displayName: "Terraform Apply - ${{ parameters.TERRAFORM_ACTION }}"
+            env:
+              ARM_SKIP_PROVIDER_REGISTRATION: true
+              ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+              ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+              ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+              ARM_TENANT_ID: $(ARM_TENANT_ID)
+          - bash: |
+              mkdir -p $(APPLY_WORKSPACE_DIRECTORY)
+              if [ ${{ parameters.DEBUG_MODE }} == True ]; then
+                echo "Creating workspace directory to upload pipeline resources:"
+                ls -al $(APPLY_WORKSPACE_DIRECTORY)
+              fi
+            displayName: "Creating apply workspace folder"
+          - task: PublishPipelineArtifact@1
+            displayName: "Publishing apply workspace directory"
+            inputs:
+              targetPath: '$(APPLY_WORKSPACE_DIRECTORY)'
+              artifact: 'terraformApply'
+              publishLocation: 'pipeline'
+              
+  - stage: SaveChanges
+    displayName: "Save Terraform State and Variables"
+    dependsOn: Apply
+    condition: eq(dependencies.Apply.result, 'Succeeded')
+    jobs:
+      - job: SaveChanges
+        displayName: "Save Terraform State and Variables"
+        steps:
+          - checkout: self
+            path: $(Build.SourceBranchName)
+            persistCredentials: true
+            displayName: "Repository Checkout"
+          - script: |
+              git config --global user.email ""
+              git config --global user.name "MyCompany Terraform Manager"
+              git fetch
+              git checkout $(Build.SourceBranchName)
+            displayName: "Git client setup"
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'terraformPrepare'
+              targetPath: './'
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'terraformPlan'
+              targetPath: './'
+          - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'current'
+              artifactName: 'terraformApply'
+              targetPath: './'
+          - script: |
+              git add .terraform.lock.hcl
+              if [ ${{ parameters.PERSIST_CONSOLE_VARIABLES }} == True ]; then
+                echo "Adding console.variables.tf file too"
+                git add console.variables.tf
+              fi
+
+              git commit -m "Update Terraform resources"
+              git commit -m "Update Terraform Console Variables and terraform lock file"
+              git push
+              if [ ${{ parameters.DEBUG_MODE }} == True ]; then
+                echo "Folder view:"
+                ls -la
+              fi
+            displayName: 'Save changes to repository'

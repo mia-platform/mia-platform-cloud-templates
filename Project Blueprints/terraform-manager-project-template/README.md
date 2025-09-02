@@ -18,10 +18,11 @@ The Azure DevOps pipeline requires the following variables to be replaced before
 | `DEVOPS_TRIGGER_USER` | The Azure DevOps username or service account used to trigger the pipeline | `myuser@domain.com` |
 | `DEVOPS_TRIGGER_PRIVATE_ACCESS_TOKEN` | The Azure DevOps Personal Access Token (PAT) for authentication | `abcdef1234567890` |
 
-## Sample Incrastructure Resources
-To setup this solution you need to have some Infrastructure Components configured in the Software Catalog, Following, the asset definitions for a two samples.
+## Sample assets
+To setup this solution you need to have some Infrastructure Components configured in the Software Catalog, and some existing Terraform repositories. Following, some sample definitions.
 
-### Azure Storage
+### Azure Storage 
+Asset descriptor for Software Marketplace item related to Azure Storage. The `terraformProjectId` parameter must reference an existing Terraform project on Azure DevOps: that will be the repository where the Terraform scripts to be executed are committed. That pipeline will be executed with the generated Terraform variables.
 ```json
 {
   "generator": {
@@ -151,7 +152,10 @@ To setup this solution you need to have some Infrastructure Components configure
 }
 ```
 
+[Here](../attachments/teraform-project-storage/), a sample Terraform repository for Azure VM.
+
 ### Azure VM
+Asset descriptor for Software Marketplace item related to Azure VM. The `terraformProjectId` parameter must reference an existing Terraform project on Azure DevOps: that will be the repository where the Terraform scripts to be executed are committed. That pipeline will be executed with the generated Terraform variables.
 ```json
 {
   "generator": {
@@ -324,3 +328,5 @@ To setup this solution you need to have some Infrastructure Components configure
   }
 }
 ```
+
+[Here](../attachments/teraform-project-vm/), a sample Terraform repository for Azure VM.
